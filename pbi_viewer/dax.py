@@ -12,9 +12,6 @@ class DAXError(ValueError):
     pass
 
 
-_UNSUPPORTED = object()
-
-
 @dataclass
 class ColumnValue:
     table: str
@@ -226,45 +223,18 @@ class DAXRuntime:
             raise DAXError(f"Dependência circular na medida {name}")
         self._measure_stack.append(name.casefold())
         try:
-            # Power BI commonly uses this compact pattern for a KPI label:
-            # VAR T = TOPN(1, ADDCOLUMNS(VALUES(Table[Column]), ...))
-            # RETURN COALESCE(CONCATENATEX(T, Table[Column]), "—")
-            # Evaluate it directly over the filtered column while retaining
-            # the model's relationship/filter semantics.
-            topn_text = self._evaluate_topn_text(measure["expression"], context)
-            if topn_text is not _UNSUPPORTED:
-                return topn_text
             return self.evaluate(measure["expression"], context)
         finally:
             self._measure_stack.pop()
-
-    def _evaluate_topn_text(self, expression: str, context: FilterContext) -> Any:
-        import re
-
-        match = re.search(
-            r"TOPN\s*\(\s*1\s*,\s*ADDCOLUMNS\s*\(\s*VALUES\s*\(\s*('(?:[^']|'')+'|[^'\[]+)\[([^\]]+)\]",
-            expression,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        if not match or "CONCATENATEX" not in expression.upper():
-            return _UNSUPPORTED
-        table, column = _table_name(match.group(1)), match.group(2)
-        if table not in self.tables or column not in self.tables[table]:
-            return _UNSUPPORTED
-        series = self.tables[table].loc[self.mask(table, context), column].dropna()
-        if series.empty:
-            return "—"
-        counts = series.value_counts(dropna=True)
-        # TOPN is ordered by the generated count descending and the source
-        # column ascending, matching the expression emitted by Power BI.
-        best_count = counts.max()
-        candidates = sorted((value for value, count in counts.items() if count == best_count), key=lambda value: str(value))
-        return str(candidates[0]) if candidates else "—"
 
     def evaluate(self, expression: str, context: FilterContext) -> Any:
         expr = _strip_outer(expression)
         if not expr:
             return None
+        variables = getattr(self, "_active_variables", {})
+        variable = re.fullmatch(r"__VAR_([A-Za-z_][A-Za-z0-9_]*)", expr, re.IGNORECASE)
+        if variable and variable.group(1).casefold() in variables:
+            return variables[variable.group(1).casefold()]
         if re.match(r"^VAR\s+", expr, re.IGNORECASE):
             return self._evaluate_vars(expr, context)
         if expr.startswith('"') and expr.endswith('"'):
@@ -288,8 +258,22 @@ class DAXRuntime:
                 if operator in {"&&", "||"}:
                     return self._boolean(left, right, operator)
                 a, b = _scalar(left), _scalar(right)
-                if operator == "+": return a + b
-                if operator == "-": return (0 if a is None else a) - (0 if b is None else b)
+                if operator == "+":
+                    if isinstance(a, str) and re.match(r"^\d{4}-\d{2}-\d{2}", a):
+                        import pandas as pd
+                        a = pd.Timestamp(a)
+                    if isinstance(a, (datetime, date)) and isinstance(b, (int, float)):
+                        import pandas as pd
+                        return pd.Timestamp(a) + pd.Timedelta(days=b)
+                    return a + b
+                if operator == "-":
+                    if isinstance(a, str) and re.match(r"^\d{4}-\d{2}-\d{2}", a):
+                        import pandas as pd
+                        a = pd.Timestamp(a)
+                    if isinstance(a, (datetime, date)) and isinstance(b, (int, float)):
+                        import pandas as pd
+                        return pd.Timestamp(a) - pd.Timedelta(days=b)
+                    return (0 if a is None else a) - (0 if b is None else b)
                 if operator == "*": return (0 if a is None else a) * (0 if b is None else b)
                 if operator == "/": return None if b in (0, None) else a / b
 
@@ -311,7 +295,7 @@ class DAXRuntime:
                 if row_column.casefold() == row_name.casefold():
                     return row_value
             return self.evaluate_measure(measure.group(1), context)
-        call = re.fullmatch(r"([A-Za-z]+)\((.*)\)", expr, re.DOTALL)
+        call = re.fullmatch(r"([A-Za-z][A-Za-z0-9_.]*)\((.*)\)", expr, re.DOTALL)
         if call:
             return self._call(call.group(1).upper(), _split_args(call.group(2)), context)
         if expr in self.tables:
@@ -365,20 +349,15 @@ class DAXRuntime:
             return variables[expr.casefold()]
         for name, value in variables.items():
             expr = re.sub(rf"\b{re.escape(name)}\b", f"__VAR_{name}", expr, flags=re.IGNORECASE)
-        # Replace variable tokens with quoted-safe direct values by evaluating
-        # function arguments ourselves; scalar variables are handled here.
-        for name, value in variables.items():
-            token = f"__VAR_{name}"
-            if token in expr:
-                if isinstance(value, VirtualTable):
-                    self._active_variables = variables
-                    return self._call_with_variables(expr, context, variables)
-                expr = expr.replace(token, repr(value) if not isinstance(value, str) else '"' + value.replace('"', '""') + '"')
         self._active_variables = variables
+        if any(isinstance(value, VirtualTable) for value in variables.values()):
+            call = re.fullmatch(r"([A-Za-z][A-Za-z0-9_.]*)\((.*)\)", expr, re.DOTALL)
+            if call:
+                return self._call(call.group(1).upper(), _split_args(call.group(2)), context)
         return self.evaluate(expr, context)
 
     def _call_with_variables(self, expression: str, context: FilterContext, variables: dict[str, Any]) -> Any:
-        call = re.fullmatch(r"([A-Za-z]+)\((.*)\)", expression, re.DOTALL)
+        call = re.fullmatch(r"([A-Za-z][A-Za-z0-9_.]*)\((.*)\)", expression, re.DOTALL)
         if not call: raise DAXError(f"Variável de tabela não suportada: {expression[:40]}")
         name, args = call.group(1).upper(), _split_args(call.group(2))
         return self._call(name, args, context)
@@ -424,7 +403,7 @@ class DAXRuntime:
             if not isinstance(item, ColumnValue): raise DAXError(f"{name} requer uma coluna")
             series = item.values[self.mask(item.table, context)].drop_duplicates().dropna().reset_index(drop=True)
             return VirtualTable(__import__("pandas").DataFrame({item.column: series}), item.table)
-        if name == "ALL":
+        if name in {"ALL", "ALLSELECTED"}:
             raw = args[0].strip(); table = _table_name(raw)
             if table in self.tables: return VirtualTable(self.tables[table].copy(), table)
             item = value(raw)
@@ -479,28 +458,195 @@ class DAXRuntime:
                 item = _scalar(value(raw))
                 if item is not None and not (isinstance(item, float) and pd.isna(item)): return item
             return None
+        if name == "SWITCH":
+            target = _scalar(value(args[0]))
+            pairs = args[1:]
+            has_else = len(pairs) % 2 == 1
+            for index in range(0, len(pairs) - (1 if has_else else 0), 2):
+                candidate = _scalar(value(pairs[index]))
+                if bool(candidate) if target is True else candidate == target:
+                    return value(pairs[index + 1])
+            return value(pairs[-1]) if has_else else None
+        if name in {"DATESINPERIOD", "DATESBETWEEN"}:
+            column = value(args[0])
+            if not isinstance(column, ColumnValue): raise DAXError(f"{name} requer uma coluna de data")
+            series = pd.to_datetime(column.values, errors="coerce")
+            start = pd.Timestamp(_scalar(value(args[1])))
+            if name == "DATESBETWEEN":
+                end = pd.Timestamp(_scalar(value(args[2])))
+                return Condition(column.table, series.between(start, end, inclusive="both"), column.column)
+            count = int(_scalar(value(args[2])))
+            unit = args[3].strip().upper()
+            offsets = {
+                "DAY": lambda n: pd.Timedelta(days=n),
+                "WEEK": lambda n: pd.Timedelta(weeks=n),
+                "MONTH": lambda n: pd.DateOffset(months=n),
+                "QUARTER": lambda n: pd.DateOffset(months=3 * n),
+                "YEAR": lambda n: pd.DateOffset(years=n),
+            }
+            if unit not in offsets: raise DAXError(f"Intervalo DATESINPERIOD inválido: {unit}")
+            end = start + offsets[unit](count)
+            low, high = sorted((start, end))
+            mask = series.between(low, high, inclusive="right" if count < 0 else "left")
+            return Condition(column.table, mask.fillna(False), column.column)
+        if name in {"DATESYTD", "DATESMTD", "DATESQTD"}:
+            column = value(args[0])
+            if not isinstance(column, ColumnValue): raise DAXError(f"{name} requer uma coluna de data")
+            series = pd.to_datetime(column.values, errors="coerce")
+            visible = series[self.mask(column.table, context)]
+            end = visible.max()
+            if pd.isna(end): return Condition(column.table, series.notna() & False, column.column)
+            if name == "DATESYTD": start = pd.Timestamp(end.year, 1, 1)
+            elif name == "DATESMTD": start = pd.Timestamp(end.year, end.month, 1)
+            else: start = pd.Timestamp(end.year, ((end.month - 1) // 3) * 3 + 1, 1)
+            return Condition(column.table, series.between(start, end, inclusive="both"), column.column)
+        if name in {"SAMEPERIODLASTYEAR", "PREVIOUSYEAR", "PREVIOUSMONTH"}:
+            column = value(args[0])
+            if not isinstance(column, ColumnValue): raise DAXError(f"{name} requer uma coluna de data")
+            series = pd.to_datetime(column.values, errors="coerce")
+            visible = series[self.mask(column.table, context)].dropna()
+            if visible.empty: return Condition(column.table, series.notna() & False, column.column)
+            start, end = visible.min(), visible.max()
+            if name in {"SAMEPERIODLASTYEAR", "PREVIOUSYEAR"}:
+                start, end = start - pd.DateOffset(years=1), end - pd.DateOffset(years=1)
+            else:
+                start, end = start - pd.DateOffset(months=1), end - pd.DateOffset(months=1)
+            return Condition(column.table, series.between(start, end, inclusive="both"), column.column)
+        if name in {"PERCENTILEX.INC", "PERCENTILEX.EXC", "MEDIANX", "STDEVX.P", "STDEVX.S", "VARX.P", "VARX.S"}:
+            base = value(args[0])
+            if isinstance(base, str) and base in self.tables:
+                base = VirtualTable(self.tables[base].loc[self.mask(base, context)].copy(), base)
+            if not isinstance(base, VirtualTable): raise DAXError(f"{name} requer uma tabela")
+            values = []
+            for _, row in base.frame.iterrows():
+                child = self._row_context(context, base.source, row)
+                item = _scalar(value(args[1], child))
+                if item is not None and not pd.isna(item): values.append(float(item))
+            if not values: return None
+            data = pd.Series(values)
+            if name.startswith("PERCENTILEX"):
+                percentile = float(_scalar(value(args[2])))
+                return _python(data.quantile(percentile, interpolation="linear"))
+            if name == "MEDIANX": return _python(data.median())
+            if name.startswith("STDEVX"): return _python(data.std(ddof=0 if name.endswith(".P") else 1))
+            return _python(data.var(ddof=0 if name.endswith(".P") else 1))
+        if name in {"SELECTEDVALUE", "HASONEVALUE"}:
+            column = value(args[0])
+            if not isinstance(column, ColumnValue): raise DAXError(f"{name} requer uma coluna")
+            values = column.values[self.mask(column.table, context)].dropna().drop_duplicates()
+            if name == "HASONEVALUE": return len(values) == 1
+            return _python(values.iloc[0]) if len(values) == 1 else value(args[1]) if len(args) > 1 else None
+        if name == "BLANK": return None
+        if name in {"AND", "OR"}:
+            left, right = value(args[0]), value(args[1])
+            return self._boolean(left, right, "&&" if name == "AND" else "||")
+        if name in {"ABS", "SQRT", "EXP", "LN", "LOG10", "SIGN"}:
+            item = float(_scalar(value(args[0])))
+            return {"ABS": abs, "SQRT": math.sqrt, "EXP": math.exp, "LN": math.log, "LOG10": math.log10, "SIGN": lambda x: (x > 0) - (x < 0)}[name](item)
+        if name in {"ROUND", "ROUNDUP", "ROUNDDOWN"}:
+            item, digits = float(_scalar(value(args[0]))), int(_scalar(value(args[1])))
+            factor = 10 ** digits
+            if name == "ROUNDUP": return math.ceil(abs(item) * factor) / factor * (1 if item >= 0 else -1)
+            if name == "ROUNDDOWN": return math.floor(abs(item) * factor) / factor * (1 if item >= 0 else -1)
+            return round(item, digits)
+        if name in {"LEN", "LOWER", "UPPER", "TRIM"}:
+            text = str(_scalar(value(args[0])) or "")
+            if name == "LEN": return len(text)
+            if name == "LOWER": return text.lower()
+            if name == "UPPER": return text.upper()
+            return " ".join(text.split())
+        if name in {"LEFT", "RIGHT"}:
+            text = str(_scalar(value(args[0])) or ""); size = int(_scalar(value(args[1]))) if len(args) > 1 else 1
+            return text[:size] if name == "LEFT" else text[-size:]
+        if name == "MID":
+            text = str(_scalar(value(args[0])) or ""); start = int(_scalar(value(args[1]))) - 1; size = int(_scalar(value(args[2])))
+            return text[start:start + size]
+        if name in {"YEAR", "MONTH", "DAY"}:
+            item = pd.Timestamp(_scalar(value(args[0])))
+            return {"YEAR": item.year, "MONTH": item.month, "DAY": item.day}[name]
+        if name in {"TODAY", "NOW"}:
+            now = pd.Timestamp.now()
+            return now.normalize() if name == "TODAY" else now
+        if name == "DATE": return pd.Timestamp(int(value(args[0])), int(value(args[1])), int(value(args[2])))
+        if name in {"EDATE", "EOMONTH"}:
+            item = pd.Timestamp(_scalar(value(args[0]))); months = int(_scalar(value(args[1])))
+            shifted = item + pd.DateOffset(months=months)
+            return shifted + pd.offsets.MonthEnd(0) if name == "EOMONTH" else shifted
+        if name == "DATEDIFF":
+            start, end, unit = pd.Timestamp(_scalar(value(args[0]))), pd.Timestamp(_scalar(value(args[1]))), args[2].strip().upper()
+            if unit == "DAY": return (end - start).days
+            if unit == "WEEK": return (end - start).days // 7
+            months = (end.year - start.year) * 12 + end.month - start.month
+            if unit == "MONTH": return months
+            if unit == "QUARTER": return months // 3
+            if unit == "YEAR": return end.year - start.year
+            seconds = (end - start).total_seconds()
+            return int(seconds // {"HOUR": 3600, "MINUTE": 60}.get(unit, 1))
+        if name in {"CONCATENATE", "COMBINEVALUES"}:
+            delimiter = str(_scalar(value(args[0]))) if name == "COMBINEVALUES" else ""
+            parts = args[1:] if name == "COMBINEVALUES" else args
+            return delimiter.join(str(_scalar(value(raw)) or "") for raw in parts)
+        if name == "SUBSTITUTE":
+            text, old, new = (str(_scalar(value(raw)) or "") for raw in args[:3])
+            return text.replace(old, new)
+        if name in {"SEARCH", "FIND"}:
+            needle, text = str(_scalar(value(args[0]))), str(_scalar(value(args[1])))
+            start = int(_scalar(value(args[2]))) - 1 if len(args) > 2 else 0
+            haystack, query = (text.casefold(), needle.casefold()) if name == "SEARCH" else (text, needle)
+            found = haystack.find(query, start)
+            return found + 1 if found >= 0 else value(args[3]) if len(args) > 3 else None
+        if name in {"CEILING", "FLOOR"}:
+            item, significance = float(_scalar(value(args[0]))), abs(float(_scalar(value(args[1]))))
+            return (math.ceil if name == "CEILING" else math.floor)(item / significance) * significance
+        if name == "FORMAT":
+            item, fmt = _scalar(value(args[0])), str(_scalar(value(args[1])))
+            if item is None: return ""
+            if isinstance(item, (datetime, date)):
+                return pd.Timestamp(item).strftime(fmt.replace("yyyy", "%Y").replace("MM", "%m").replace("dd", "%d"))
+            if "%" in fmt: return f"{float(item) * 100:.{max(0, fmt.count('0') - 1)}f}%"
+            decimals = len(fmt.split(".", 1)[1]) if "." in fmt else 0
+            return f"{float(item):,.{decimals}f}" if isinstance(item, (int, float)) else str(item)
 
         if name == "CALCULATE":
             modified = context.copy()
             added: set[tuple[str, str]] = set()
             for raw in args[1:]:
+                clear = re.fullmatch(r"(?:ALL|REMOVEFILTERS)\s*\((.*)\)", raw.strip(), re.IGNORECASE | re.DOTALL)
+                if clear:
+                    target = clear.group(1).strip()
+                    column_match = re.fullmatch(r"('(?:[^']|'')+'|[^'\[]+)\[([^]]+)\]", target)
+                    if column_match:
+                        modified.columns.pop((_table_name(column_match.group(1)), column_match.group(2)), None)
+                    else:
+                        table = _table_name(target)
+                        modified.columns = {key: mask for key, mask in modified.columns.items() if key[0] != table}
+                        modified.tables.pop(table, None)
+                    modified.resolved = None
+                    continue
                 condition = self.evaluate(raw, context)
+                if isinstance(condition, VirtualTable) and condition.source in self.tables:
+                    series = self.tables[condition.source]
+                    condition = Condition(condition.source, pd.Series(series.index.isin(condition.frame.index), index=series.index))
                 if not isinstance(condition, Condition):
                     raise DAXError(f"Filtro CALCULATE inválido: {raw}")
                 key = (condition.table, condition.column or "")
                 modified.add(condition, replace=condition.column is not None and key not in added)
                 added.add(key)
             return self.evaluate(args[0], modified)
+        if name == "KEEPFILTERS": return value(args[0])
         if name == "FILTER":
-            table = _table_name(args[0])
+            base = value(args[0])
+            table = base.source if isinstance(base, VirtualTable) else _table_name(args[0])
             condition = self.evaluate(args[1], context)
             if not isinstance(condition, Condition) or condition.table != table:
                 raise DAXError("FILTER requer predicado da mesma tabela")
-            return Condition(table, self.mask(table, context) & condition.mask)
+            mask = self.mask(table, context) & condition.mask
+            return VirtualTable(self.tables[table].loc[mask].copy(), table)
         if name == "DIVIDE":
             numerator = _scalar(self.evaluate(args[0], context))
             denominator = _scalar(self.evaluate(args[1], context))
             alternate = _scalar(self.evaluate(args[2], context)) if len(args) > 2 else None
+            if numerator is None or pd.isna(numerator): return None
             return alternate if denominator in (0, None) or pd.isna(denominator) else numerator / denominator
         if name == "IF":
             condition = self.evaluate(args[0], context)
@@ -521,11 +667,16 @@ class DAXRuntime:
                 return Condition(value.table, mask, value.column)
             return needle.casefold() in str(value).casefold()
         if name == "COUNTROWS":
+            table = value(args[0])
+            if isinstance(table, VirtualTable): return len(table.frame)
             table = _table_name(args[0])
             return int(self.mask(table, context).sum())
 
         value = self.evaluate(args[0], context)
         if not isinstance(value, ColumnValue):
+            if name in {"MAX", "MIN"} and len(args) > 1:
+                other = _scalar(self.evaluate(args[1], context))
+                return max(value, other) if name == "MAX" else min(value, other)
             raise DAXError(f"{name} requer uma coluna")
         series = value.values[self.mask(value.table, context)]
         if name == "SUM": return _python(series.sum())
@@ -535,6 +686,9 @@ class DAXRuntime:
         if name == "COUNT": return int(series.count())
         if name == "COUNTA": return int(series.count())
         if name == "DISTINCTCOUNT": return int(series.nunique(dropna=False))
+        if name == "MEDIAN": return _python(series.median())
+        if name in {"STDEV.P", "STDEV.S"}: return _python(series.std(ddof=0 if name.endswith(".P") else 1))
+        if name in {"VAR.P", "VAR.S"}: return _python(series.var(ddof=0 if name.endswith(".P") else 1))
         raise DAXError(f"Função DAX não suportada: {name}")
 
 

@@ -26,7 +26,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD = 250 * 1024 * 1024
 MAX_EXTRACTED = 1024 * 1024 * 1024
 SESSION_COOKIE = "pbi_runner_session"
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 
 class ReportRuntime:

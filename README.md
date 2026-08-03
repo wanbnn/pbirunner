@@ -85,7 +85,7 @@ Uploads ZIP têm validação contra caminhos inseguros e limite de 1 GB para o c
 
 ## Runtime DAX
 
-O executor vetorizado atual cobre as construções usadas pelo projeto de referência: `CALCULATE`, `FILTER`, `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `COUNTA`, `COUNTROWS`, `DISTINCTCOUNT`, `DIVIDE`, `IF`, `IN`, `NOT`, `ISBLANK`, `CONTAINSSTRING`, operadores matemáticos, comparações e operadores booleanos. A cobertura é incremental; funções DAX ainda não implementadas são reportadas por visual, sem inventar valores.
+O executor vetorizado cobre variáveis (`VAR`/`RETURN`), contexto (`CALCULATE`, `FILTER`, `ALL`, `ALLSELECTED`, `REMOVEFILTERS`, `KEEPFILTERS`), tabelas virtuais (`VALUES`, `DISTINCT`, `ADDCOLUMNS`, `TOPN`), iteradores (`SUMX`, `AVERAGEX`, `MINX`, `MAXX`, `COUNTX`, `CONCATENATEX`), inteligência de tempo (`DATESINPERIOD`, `DATESBETWEEN`, `DATESYTD`, `DATESMTD`, `DATESQTD`, `SAMEPERIODLASTYEAR`, `PREVIOUSYEAR`, `PREVIOUSMONTH`), estatística (`PERCENTILEX.INC`, `PERCENTILEX.EXC`, `MEDIANX`, `STDEVX`, `VARX`), lógica, texto, matemática e agregações escalares. A cobertura é incremental; funções DAX ainda não implementadas são reportadas por visual, sem inventar valores ou bloquear o restante da página.
 
 O PBIP normalmente não versiona os dados locais. Quando seu `cache.abf` contém zero linhas, o viewer procura um PBIX irmão com o mesmo nome. Arquivos Power BI usados em testes locais não são enviados ao repositório porque podem conter dados reais.
 
