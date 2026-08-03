@@ -12,6 +12,9 @@ class DAXError(ValueError):
     pass
 
 
+_UNSUPPORTED = object()
+
+
 @dataclass
 class ColumnValue:
     table: str
@@ -204,9 +207,40 @@ class DAXRuntime:
             raise DAXError(f"Dependência circular na medida {name}")
         self._measure_stack.append(name.casefold())
         try:
+            # Power BI commonly uses this compact pattern for a KPI label:
+            # VAR T = TOPN(1, ADDCOLUMNS(VALUES(Table[Column]), ...))
+            # RETURN COALESCE(CONCATENATEX(T, Table[Column]), "—")
+            # Evaluate it directly over the filtered column while retaining
+            # the model's relationship/filter semantics.
+            topn_text = self._evaluate_topn_text(measure["expression"], context)
+            if topn_text is not _UNSUPPORTED:
+                return topn_text
             return self.evaluate(measure["expression"], context)
         finally:
             self._measure_stack.pop()
+
+    def _evaluate_topn_text(self, expression: str, context: FilterContext) -> Any:
+        import re
+
+        match = re.search(
+            r"TOPN\s*\(\s*1\s*,\s*ADDCOLUMNS\s*\(\s*VALUES\s*\(\s*('(?:[^']|'')+'|[^'\[]+)\[([^\]]+)\]",
+            expression,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match or "CONCATENATEX" not in expression.upper():
+            return _UNSUPPORTED
+        table, column = _table_name(match.group(1)), match.group(2)
+        if table not in self.tables or column not in self.tables[table]:
+            return _UNSUPPORTED
+        series = self.tables[table].loc[self.mask(table, context), column].dropna()
+        if series.empty:
+            return "—"
+        counts = series.value_counts(dropna=True)
+        # TOPN is ordered by the generated count descending and the source
+        # column ascending, matching the expression emitted by Power BI.
+        best_count = counts.max()
+        candidates = sorted((value for value, count in counts.items() if count == best_count), key=lambda value: str(value))
+        return str(candidates[0]) if candidates else "—"
 
     def evaluate(self, expression: str, context: FilterContext) -> Any:
         expr = _strip_outer(expression)

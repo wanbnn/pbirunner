@@ -96,6 +96,23 @@
   font-size: 10px;
 }
 
+.visual-error {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px;
+  box-sizing: border-box;
+  color: #8a4b26;
+  text-align: center;
+  font-size: 10px;
+}
+
+.visual-error strong { font-size: 11px; }
+.visual-error span { max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .data-loading i {
   width: 13px;
   height: 13px;

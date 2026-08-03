@@ -126,7 +126,11 @@ class ModelEngine:
             try:
                 results[visual["id"]] = self.query_visual(visual, context)
             except Exception as exc:
-                errors[visual["id"]] = str(exc)
+                message = str(exc)
+                errors[visual["id"]] = message
+                # Keep a terminal result for the visual.  Returning no entry
+                # makes the browser treat it as an in-flight query forever.
+                results[visual["id"]] = {"kind": "error", "message": message}
         return {"visuals": results, "errors": errors, "runtime": self.status()}
 
     def query_visual(self, visual: dict[str, Any], context: FilterContext) -> dict[str, Any]:
