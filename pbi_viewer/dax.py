@@ -23,6 +23,12 @@ class ColumnValue:
 
 
 @dataclass
+class VirtualTable:
+    frame: Any
+    source: str | None = None
+
+
+@dataclass
 class Condition:
     table: str
     mask: Any
@@ -34,9 +40,10 @@ class FilterContext:
     columns: dict[tuple[str, str], Any] = field(default_factory=dict)
     tables: dict[str, list[Any]] = field(default_factory=dict)
     resolved: dict[str, Any] | None = field(default=None, repr=False)
+    row: dict[tuple[str, str], Any] = field(default_factory=dict, repr=False)
 
     def copy(self) -> "FilterContext":
-        return FilterContext(dict(self.columns), {key: list(value) for key, value in self.tables.items()})
+        return FilterContext(dict(self.columns), {key: list(value) for key, value in self.tables.items()}, row=dict(self.row))
 
     def add(self, condition: Condition, replace: bool = True) -> None:
         self.resolved = None
@@ -198,6 +205,18 @@ class DAXRuntime:
             raise DAXError(f"Coluna não encontrada: {table}[{column}]")
         return ColumnValue(table, column, self.tables[table][column])
 
+    def _row_context(self, context: FilterContext, table: str | None, row: Any) -> FilterContext:
+        child = context.copy()
+        if table and table in self.tables:
+            for column in row.index:
+                child.row[(table, column)] = row[column]
+                if column not in self.tables[table]:
+                    continue
+                value = row[column]
+                series = self.tables[table][column]
+                child.add(Condition(table, series.isna() if value is None else series == value, column), replace=False)
+        return child
+
     def evaluate_measure(self, name: str, context: FilterContext | None = None) -> Any:
         context = context or FilterContext()
         measure = self.measures.get(name.casefold())
@@ -246,6 +265,8 @@ class DAXRuntime:
         expr = _strip_outer(expression)
         if not expr:
             return None
+        if re.match(r"^VAR\s+", expr, re.IGNORECASE):
+            return self._evaluate_vars(expr, context)
         if expr.startswith('"') and expr.endswith('"'):
             return expr[1:-1].replace('""', '"')
         if re.fullmatch(r"-?\d+(?:\.\d+)?", expr):
@@ -278,9 +299,17 @@ class DAXRuntime:
 
         column = re.fullmatch(r"('(?:[^']|'')+'|[^'\[]+)\[([^]]+)\]", expr)
         if column:
-            return self.column(_table_name(column.group(1)), column.group(2))
+            table, name = _table_name(column.group(1)), column.group(2)
+            key = (table, name)
+            if key in context.row:
+                return context.row[key]
+            return self.column(table, name)
         measure = re.fullmatch(r"\[([^]]+)\]", expr)
         if measure:
+            row_name = measure.group(1)
+            for (_, row_column), row_value in context.row.items():
+                if row_column.casefold() == row_name.casefold():
+                    return row_value
             return self.evaluate_measure(measure.group(1), context)
         call = re.fullmatch(r"([A-Za-z]+)\((.*)\)", expr, re.DOTALL)
         if call:
@@ -290,6 +319,69 @@ class DAXRuntime:
         if expr.startswith("'") and expr.endswith("'") and _table_name(expr) in self.tables:
             return _table_name(expr)
         raise DAXError(f"Expressão DAX não suportada: {expr}")
+
+    def _evaluate_vars(self, expression: str, context: FilterContext) -> Any:
+        body = expression.strip()[3:].strip()
+        # Find the top-level RETURN; commas/parentheses inside expressions do
+        # not terminate a variable declaration.
+        depth = 0
+        quoted = False
+        return_at = None
+        for i, char in enumerate(body):
+            if char == '"': quoted = not quoted
+            if quoted: continue
+            if char == '(': depth += 1
+            elif char == ')': depth -= 1
+            elif depth == 0 and body[i:i + 6].upper() == 'RETURN' and (i == 0 or body[i - 1].isspace()):
+                return_at = i
+                break
+        if return_at is None:
+            raise DAXError("VAR sem RETURN")
+        declarations, result_expr = body[:return_at].strip(), body[return_at + 6:].strip()
+        variables: dict[str, Any] = {}
+        while declarations:
+            match = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*", declarations)
+            if not match:
+                raise DAXError(f"Declaração VAR inválida: {declarations[:40]}")
+            name = match.group(1).casefold()
+            start = match.end(); depth = 0; quoted = False; next_var = None
+            for i in range(start, len(declarations)):
+                char = declarations[i]
+                if char == '"': quoted = not quoted
+                if quoted: continue
+                if char == '(': depth += 1
+                elif char == ')': depth -= 1
+                if depth == 0 and declarations[i:i + 3].upper() == 'VAR' and (i == 0 or declarations[i - 1].isspace()):
+                    next_var = i; break
+            raw_value = declarations[start:next_var].strip() if next_var is not None else declarations[start:].strip()
+            variables[name] = self._evaluate_with_variables(raw_value, context, variables)
+            if next_var is None: break
+            declarations = declarations[next_var + 3:].strip()
+        return self._evaluate_with_variables(result_expr, context, variables)
+
+    def _evaluate_with_variables(self, expression: str, context: FilterContext, variables: dict[str, Any]) -> Any:
+        expr = expression.strip()
+        if expr.casefold() in variables:
+            return variables[expr.casefold()]
+        for name, value in variables.items():
+            expr = re.sub(rf"\b{re.escape(name)}\b", f"__VAR_{name}", expr, flags=re.IGNORECASE)
+        # Replace variable tokens with quoted-safe direct values by evaluating
+        # function arguments ourselves; scalar variables are handled here.
+        for name, value in variables.items():
+            token = f"__VAR_{name}"
+            if token in expr:
+                if isinstance(value, VirtualTable):
+                    self._active_variables = variables
+                    return self._call_with_variables(expr, context, variables)
+                expr = expr.replace(token, repr(value) if not isinstance(value, str) else '"' + value.replace('"', '""') + '"')
+        self._active_variables = variables
+        return self.evaluate(expr, context)
+
+    def _call_with_variables(self, expression: str, context: FilterContext, variables: dict[str, Any]) -> Any:
+        call = re.fullmatch(r"([A-Za-z]+)\((.*)\)", expression, re.DOTALL)
+        if not call: raise DAXError(f"Variável de tabela não suportada: {expression[:40]}")
+        name, args = call.group(1).upper(), _split_args(call.group(2))
+        return self._call(name, args, context)
 
     def _compare(self, left: Any, right: Any, operator: str) -> Any:
         column = left if isinstance(left, ColumnValue) else right if isinstance(right, ColumnValue) else None
@@ -319,6 +411,74 @@ class DAXRuntime:
 
     def _call(self, name: str, args: list[str], context: FilterContext) -> Any:
         import pandas as pd
+
+        variables = getattr(self, "_active_variables", {})
+        def value(raw: str, current: FilterContext = context) -> Any:
+            token = raw.strip().casefold()
+            if token in variables: return variables[token]
+            if token.startswith("__var_") and token[6:] in variables: return variables[token[6:]]
+            return self.evaluate(raw, current)
+
+        if name in {"VALUES", "DISTINCT"}:
+            item = value(args[0])
+            if not isinstance(item, ColumnValue): raise DAXError(f"{name} requer uma coluna")
+            series = item.values[self.mask(item.table, context)].drop_duplicates().dropna().reset_index(drop=True)
+            return VirtualTable(__import__("pandas").DataFrame({item.column: series}), item.table)
+        if name == "ALL":
+            raw = args[0].strip(); table = _table_name(raw)
+            if table in self.tables: return VirtualTable(self.tables[table].copy(), table)
+            item = value(raw)
+            if isinstance(item, ColumnValue): return VirtualTable(__import__("pandas").DataFrame({item.column: item.values.drop_duplicates()}), item.table)
+        if name == "ADDCOLUMNS":
+            base = value(args[0])
+            if not isinstance(base, VirtualTable): raise DAXError("ADDCOLUMNS requer uma tabela")
+            frame = base.frame.copy()
+            for i in range(1, len(args), 2):
+                col_name = args[i].strip().strip('"')
+                values = []
+                for _, row in frame.iterrows():
+                    child = self._row_context(context, base.source, row)
+                    values.append(_scalar(value(args[i + 1], child)))
+                frame[col_name] = values
+            return VirtualTable(frame, base.source)
+        if name == "TOPN":
+            n = int(_scalar(value(args[0]))); base = value(args[1])
+            if not isinstance(base, VirtualTable): raise DAXError("TOPN requer uma tabela")
+            frame = base.frame.copy()
+            for i in range(2, len(args), 2):
+                order_name = args[i].strip().strip('"')
+                order_name = re.sub(r"^.*\[([^]]+)\]$", r"\1", order_name)
+                direction = args[i + 1].strip().upper() if i + 1 < len(args) else "DESC"
+                if order_name in frame.columns: frame["__sort"] = frame[order_name]
+            if "__sort" in frame: frame = frame.sort_values("__sort", ascending=direction != "DESC", kind="stable").drop(columns=["__sort"])
+            return VirtualTable(frame.head(n), base.source)
+        if name == "CONCATENATEX":
+            base = value(args[0]);
+            if not isinstance(base, VirtualTable): raise DAXError("CONCATENATEX requer uma tabela")
+            delimiter = str(_scalar(value(args[2]))) if len(args) > 2 else ", "
+            vals = []
+            for _, row in base.frame.iterrows():
+                child = self._row_context(context, base.source, row)
+                vals.append(str(_scalar(value(args[1], child))))
+            return delimiter.join(vals)
+        if name in {"SUMX", "AVERAGEX", "MINX", "MAXX", "COUNTX"}:
+            base = value(args[0])
+            if not isinstance(base, VirtualTable): raise DAXError(f"{name} requer uma tabela")
+            vals=[]
+            for _, row in base.frame.iterrows():
+                child=self._row_context(context, base.source, row)
+                item=_scalar(value(args[1], child));
+                if item is not None: vals.append(item)
+            if name == "COUNTX": return len(vals)
+            if not vals: return None
+            if name == "SUMX": return sum(vals)
+            if name == "AVERAGEX": return sum(vals)/len(vals)
+            return max(vals) if name == "MAXX" else min(vals)
+        if name == "COALESCE":
+            for raw in args:
+                item = _scalar(value(raw))
+                if item is not None and not (isinstance(item, float) and pd.isna(item)): return item
+            return None
 
         if name == "CALCULATE":
             modified = context.copy()
