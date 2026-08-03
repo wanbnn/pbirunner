@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PBI Runner</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/pbi.css">
+  <link rel="stylesheet" href="/platform.css">
+</head>
+<body>
+  <section id="authView" class="auth-view hidden">
+    <div class="auth-brand"><span class="brand-mark"><i></i><i></i><i></i></span><span>PBI <b>Runner</b></span></div>
+    <div id="authCard" class="auth-card"></div>
+  </section>
+
+  <section id="portalView" class="portal-view hidden">
+    <header class="portal-topbar">
+      <button class="portal-brand" id="portalHome"><span class="brand-mark"><i></i><i></i><i></i></span><span>PBI <b>Runner</b></span></button>
+      <div class="portal-user"><span id="portalUser"></span><button id="usersButton" class="ghost hidden">Usuários</button><button id="logoutButton" class="ghost">Sair</button></div>
+    </header>
+    <main id="portalMain" class="portal-main"></main>
+  </section>
+
+  <section id="viewerApp" class="viewer-app hidden">
+    <header class="topbar viewer-topbar">
+      <button class="back-button" id="viewerBack" title="Voltar ao workspace">←</button>
+      <div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span><span>PBI <b>Runner</b></span></div>
+      <div class="project-meta"><strong id="projectName">Carregando…</strong><span id="projectFormat"></span></div>
+      <label class="top-page-picker"><span>Página</span><select id="topPageSelect"></select></label>
+      <div class="top-actions">
+        <button class="icon-button" id="zoomOut" title="Diminuir zoom">−</button>
+        <span id="zoomLabel">100%</span>
+        <button class="icon-button" id="zoomIn" title="Aumentar zoom">+</button>
+      </div>
+    </header>
+
+    <main class="shell viewer-shell">
+      <aside class="sidebar viewer-hidden"><nav id="pageList"></nav><span id="pageCount"></span></aside>
+      <section class="workspace">
+        <div id="notice" class="notice hidden"></div>
+        <div id="reportView" class="report-view"><div id="canvasStage" class="canvas-stage"><div id="reportCanvas"></div></div></div>
+        <div id="modelView" class="model-view hidden"><div id="modelStats"></div><div id="modelGrid"></div><input id="modelSearch"></div>
+      </section>
+      <aside id="inspector" class="inspector viewer-hidden"></aside>
+    </main>
+  </section>
+
+  <dialog id="platformDialog"><div id="platformDialogBody" class="platform-dialog"></div></dialog>
+  <input id="reportUpload" type="file" accept=".pbix,.zip" class="hidden">
+  <script src="/vendor/echarts.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

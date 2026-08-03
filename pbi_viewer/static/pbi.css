@@ -1,0 +1,201 @@
+/* Camada de fidelidade PBIR aplicada sobre o shell do viewer. */
+.visual-title {
+  height: 26px;
+  padding: calc(var(--pt, 0px) + 4px) var(--pr, 0px) 2px var(--pl, 0px);
+}
+
+.visual {
+  font-family: var(--visual-font);
+}
+
+.canvas-stage {
+  display: block;
+}
+
+#reportCanvas {
+  margin: 0 auto;
+}
+
+.visual-body {
+  height: calc(100% - 26px);
+  padding: 4px var(--pr, 0px) var(--pb, 0px) var(--pl, 0px);
+}
+
+.visual.no-title .visual-body {
+  height: 100%;
+  padding: var(--pt, 0px) var(--pr, 0px) var(--pb, 0px) var(--pl, 0px);
+}
+
+.textbox {
+  display: flex;
+  align-items: center;
+  background: transparent;
+}
+
+.textbox .visual-body {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1.2;
+  white-space: normal;
+  font-weight: 400;
+  font-size: inherit;
+}
+
+.text-paragraph {
+  width: 100%;
+  white-space: pre-wrap;
+}
+
+.bars i { background: var(--primary); }
+.bars.horizontal i { display: block; border-radius: 0 3px 3px 0; }
+.chart-line { stroke: var(--primary); }
+.donut-value { stroke: var(--primary); }
+.mini-card { border-left-color: var(--primary); overflow: hidden; }
+.mini-card strong { line-height: 1.15; }
+.mini-card span { margin-top: 3px; }
+.nav-pills { gap: 4px; }
+
+.nav-pills button {
+  height: 100%;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.data-loading {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: #699282;
+  font-size: 10px;
+}
+
+.data-loading i {
+  width: 13px;
+  height: 13px;
+  border: 2px solid #dcebe1;
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: runtime-spin .7s linear infinite;
+}
+
+@keyframes runtime-spin { to { transform: rotate(360deg); } }
+
+.real-slicer {
+  width: 100%;
+  height: 100%;
+  border: 1px solid #dcebe1;
+  border-radius: 5px;
+  padding: 0 8px;
+  background: #fff;
+  color: #002015;
+  font: inherit;
+  outline: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+}
+
+.real-slicer span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.real-slicer b { flex: none; font-size: 12px; }
+
+.slicer-popover {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(520px, calc(100vw - 16px));
+  max-height: 350px;
+  overflow: hidden;
+  border: 1px solid #98a2a0;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 10px 28px #001b1233;
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+
+.slicer-options { max-height: 348px; overflow: auto; padding: 3px; }
+
+.slicer-option {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 2px;
+  padding: 7px 10px;
+  background: transparent;
+  color: #002015;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.2;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.slicer-option:hover { background: #e8f3ef; }
+.slicer-option.selected { background: #146c57; color: #fff; }
+
+.real-table-wrap { width: 100%; height: 100%; overflow: auto; }
+.real-table { height: auto; min-width: 100%; font-size: 9px; }
+.real-table thead { position: sticky; top: 0; z-index: 1; background: #fff; }
+.real-table th { color: #002015; font-weight: 700; white-space: nowrap; padding: 5px; }
+.real-table td { color: #2f6852; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 5px; }
+
+.real-bars { height: 100%; overflow: hidden; display: flex; flex-direction: column; justify-content: space-around; gap: 2px; }
+.real-bars>div { min-height: 11px; display: grid; grid-template-columns: minmax(55px,30%) 1fr 35px; gap: 5px; align-items: center; font-size: 8px; }
+.real-bars label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #2f6852; text-align: right; }
+.real-bars span { height: 70%; background: #f0f3f1; border-radius: 0 3px 3px 0; overflow: hidden; }
+.real-bars span i { height: 100%; display: block; border-radius: 0 3px 3px 0; }
+.real-bars b { font-size: 8px; color: #002015; }
+
+.real-columns { height: 100%; display: flex; align-items: flex-end; gap: 3px; padding-top: 13px; }
+.real-columns>div { flex: 1; height: 100%; min-width: 4px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; position: relative; }
+.real-columns i { width: 75%; min-height: 1px; border-radius: 3px 3px 0 0; }
+.real-columns b { position: absolute; top: -11px; font-size: 7px; white-space: nowrap; }
+.real-columns span { font-size: 6px; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; padding-top: 3px; }
+
+.real-line { height: 100%; display: flex; flex-direction: column; }
+.real-line svg { flex: 1; width: 100%; min-height: 0; }
+.axis-labels { display: flex; justify-content: space-between; color: #699282; font-size: 7px; }
+
+.real-donut { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; }
+.donut-ring { width: min(80px,55%); aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center; position: relative; }
+.donut-ring:after { content: ""; position: absolute; inset: 22%; border-radius: 50%; background: white; }
+.donut-ring b { position: relative; z-index: 1; font-size: 10px; }
+.chart-legend { display: flex; flex-direction: column; gap: 3px; max-width: 48%; font-size: 7px; }
+.chart-legend span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chart-legend i { display: inline-block; width: 6px; height: 6px; border-radius: 2px; margin-right: 4px; }
+
+.stack-chart { height: 100%; overflow: hidden; display: flex; flex-direction: column; justify-content: space-around; }
+.stack-row { min-height: 9px; display: grid; grid-template-columns: 30% 1fr; gap: 4px; align-items: center; font-size: 7px; }
+.stack-row label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+.stack-row>div { display: flex; height: 70%; overflow: hidden; border-radius: 2px; }
+.stack-row i { display: block; height: 100%; }
+
+.real-scatter { position: relative; height: 100%; border-left: 1px solid #dcebe1; border-bottom: 1px solid #dcebe1; background: repeating-linear-gradient(0deg,transparent 0 24%,#eef3f0 25%); }
+.real-scatter i { position: absolute; width: 7px; height: 7px; border-radius: 50%; transform: translate(-50%,50%); opacity: .8; }
+
+.e-chart {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}

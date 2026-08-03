@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+MonitorIA_NeoEnergia/
+*.pbix
+*.pbip
+*.zip
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+.pbi-runner-data/
