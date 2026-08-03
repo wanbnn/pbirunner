@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pbi_viewer.parser import PBIParseError, parse_project
+from pbi_viewer.parser import PBIParseError, _visual, _visual_filters, parse_project
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +36,13 @@ class ParserIntegrationTests(unittest.TestCase):
         self.assertEqual(priority_chart["style"]["categoryColors"]["P4 | MONITORAR"], "#00A443")
         self.assertIn("xAxis", priority_chart["style"])
         self.assertIn("legend", priority_chart["style"])
+        self.assertEqual(priority_chart["sort"][0]["direction"], "Descending")
+        navigator = next(visual for page in project["pages"] for visual in page["visuals"] if visual["type"] == "pageNavigator")
+        self.assertEqual(navigator["style"]["navigator"]["orientation"], "Horizontal")
+        filtered = next(visual for page in project["pages"] for visual in page["visuals"] if visual.get("title") == "Causa raiz dos recontatos")
+        self.assertEqual(filtered["filters"][0]["field"]["table"], "Atendimentos")
+        self.assertEqual(filtered["filters"][0]["operator"], "in")
+        self.assertEqual(filtered["filters"][0]["values"], [1])
 
     def test_parses_reference_pbix(self):
         project = parse_project(EXAMPLE / "MonitorIA_NeoEnergia.pbix")
@@ -47,6 +54,16 @@ class ParserIntegrationTests(unittest.TestCase):
         with tempfile.NamedTemporaryFile(suffix=".txt") as handle:
             with self.assertRaises(PBIParseError):
                 parse_project(handle.name)
+
+    def test_parses_measure_greater_than_zero_filter(self):
+        field = {"Measure": {"Expression": {"SourceRef": {"Entity": "Fatos"}}, "Property": "Total"}}
+        raw = {"filterConfig": {"filters": [{"field": field, "filter": {"Where": [{"Condition": {"Comparison": {"ComparisonKind": 1, "Left": field, "Right": {"Literal": {"Value": "0L"}}}}}]}}]}}
+        self.assertEqual(_visual_filters(raw), [{"field": {"kind": "Measure", "table": "Fatos", "name": "Total"}, "operator": "gt", "value": 0}])
+
+    def test_infers_vertical_page_navigator(self):
+        raw = {"name": "nav", "position": {"width": 80, "height": 400}, "visual": {"visualType": "pageNavigator", "objects": {}}}
+        parsed = _visual(raw, {})
+        self.assertEqual(parsed["style"]["navigator"]["orientation"], "Vertical")
 
 
 if __name__ == "__main__":

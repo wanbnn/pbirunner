@@ -168,6 +168,70 @@ def _category_colors(objects: dict[str, Any]) -> dict[str, str]:
     return result
 
 
+def _node_literal(node: Any) -> Any:
+    if not isinstance(node, dict):
+        return node
+    if "Literal" in node:
+        value = node["Literal"].get("Value")
+        return _literal({"expr": {"Literal": {"Value": value}}}, value)
+    if "Value" in node:
+        return _literal({"expr": {"Literal": node}}, node.get("Value"))
+    return None
+
+
+def _visual_filters(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    comparison_kinds = {0: "eq", 1: "gt", 2: "gte", 3: "lt", 4: "lte"}
+    inverse = {"eq": "neq", "in": "notIn", "gt": "lte", "gte": "lt", "lt": "gte", "lte": "gt"}
+
+    def parse_condition(condition: dict[str, Any], fallback: dict[str, Any] | None, negated: bool = False) -> None:
+        if "Not" in condition:
+            nested = condition["Not"].get("Expression", condition["Not"])
+            parse_condition(nested, fallback, not negated)
+            return
+        if "In" in condition:
+            spec = condition["In"]
+            expressions = spec.get("Expressions", [])
+            field = _field(expressions[0]) if expressions else fallback
+            if field and not field.get("table") and fallback:
+                field = {**field, "table": fallback.get("table", "")}
+            values = [_node_literal(row[0]) for row in spec.get("Values", []) if row]
+            if field and values:
+                result.append({"field": field, "operator": "notIn" if negated else "in", "values": values})
+            return
+        if "Comparison" in condition:
+            spec = condition["Comparison"]
+            field = _field(spec.get("Left", {})) or fallback
+            if field and not field.get("table") and fallback:
+                field = {**field, "table": fallback.get("table", "")}
+            value = _node_literal(spec.get("Right", {}))
+            raw_kind = spec.get("ComparisonKind", spec.get("Kind", 0))
+            operator = comparison_kinds.get(raw_kind, str(raw_kind).lower())
+            aliases = {"greaterthan": "gt", "greaterthanorequal": "gte", "lessthan": "lt", "lessthanorequal": "lte", "equal": "eq"}
+            operator = aliases.get(operator.replace("_", ""), operator)
+            if negated:
+                operator = inverse.get(operator, operator)
+            if field and value is not None:
+                result.append({"field": field, "operator": operator, "value": value})
+
+    for item in raw.get("filterConfig", {}).get("filters", []):
+        fallback = _field(item.get("field", {}))
+        for clause in item.get("filter", {}).get("Where", []):
+            condition = clause.get("Condition", {})
+            if isinstance(condition, dict):
+                parse_condition(condition, fallback)
+    return result
+
+
+def _visual_sort(visual: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for item in visual.get("query", {}).get("sortDefinition", {}).get("sort", []):
+        field = _field(item.get("field", {}))
+        if field:
+            result.append({"field": field, "direction": str(item.get("direction", "Ascending"))})
+    return result
+
+
 def _visual(raw: dict[str, Any], theme: dict[str, Any]) -> dict[str, Any]:
     visual = raw.get("visual", {})
     query_state = visual.get("query", {}).get("queryState", {})
@@ -202,6 +266,7 @@ def _visual(raw: dict[str, Any], theme: dict[str, Any]) -> dict[str, Any]:
     y_axis = {**value_axis, **_object_properties(theme_objects, "yAxis"), **_object_properties(objects, "yAxis")}
     line_props = {**_object_properties(theme_objects, "lineStyles"), **_object_properties(objects, "lineStyles")}
     marker_props = {**_object_properties(theme_objects, "markers"), **_object_properties(objects, "markers")}
+    layout_props = _object_properties(objects, "layout")
     nav_fill = _object_properties(objects, "fill", "default")
     nav_selected_fill = _object_properties(objects, "fill", "selected")
     nav_text = _object_properties(objects, "text", "default")
@@ -218,6 +283,8 @@ def _visual(raw: dict[str, Any], theme: dict[str, Any]) -> dict[str, Any]:
         "position": {key: position.get(key, 0) for key in ("x", "y", "z", "width", "height")},
         "fields": fields,
         "roles": roles,
+        "filters": _visual_filters(raw),
+        "sort": _visual_sort(visual),
         "style": {
             "backgroundShow": bool(_property(background_props, "show", True)),
             "background": _color(background_props, "color", str(theme.get("background", "#ffffff"))),
@@ -264,6 +331,10 @@ def _visual(raw: dict[str, Any], theme: dict[str, Any]) -> dict[str, Any]:
                 "fontSize": _property(nav_text, "fontSize", 9),
                 "fontFamily": _property(nav_text, "fontFamily", "Segoe UI"),
                 "bold": bool(_property(nav_text, "bold", False)),
+                "orientation": str(_property(layout_props, "orientation", _property(layout_props, "gridOrientation", "Vertical" if position.get("height", 0) > position.get("width", 0) else "Horizontal"))),
+                "cellPadding": _property(layout_props, "cellPadding", 4),
+                "rows": _property(layout_props, "rows", None),
+                "columns": _property(layout_props, "columns", None),
             },
             "primaryColor": _color(data_point, "fill", palette[0]),
             "palette": palette,

@@ -26,21 +26,84 @@ STATIC = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD = 250 * 1024 * 1024
 MAX_EXTRACTED = 1024 * 1024 * 1024
 SESSION_COOKIE = "pbi_runner_session"
+CACHE_VERSION = 1
 
 
 class ReportRuntime:
-    def __init__(self, source: Path):
+    def __init__(self, source: Path, cache_path: Path | None = None):
         self.project = parse_project(source)
         self.engine = ModelEngine.for_project(source, self.project.get("model"))
         self.project["dataRuntime"] = self.engine.status()
         self.lock = threading.Lock()
+        self.cache_path = cache_path
+        self.query_cache: OrderedDict[str, dict] = OrderedDict()
+        self._load_cache()
+
+    def _source_signature(self) -> dict[str, int]:
+        try:
+            stat = self.engine.source.stat()
+            return {"size": stat.st_size, "mtime": stat.st_mtime_ns}
+        except OSError:
+            return {"size": 0, "mtime": 0}
+
+    @staticmethod
+    def _cache_key(page_id: str, filters: list[dict]) -> str:
+        return f"{page_id}:{json.dumps(filters or [], ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str)}"
+
+    def _load_cache(self) -> None:
+        if not self.cache_path or not self.cache_path.exists():
+            return
+        try:
+            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            if payload.get("version") != CACHE_VERSION or payload.get("source") != self._source_signature():
+                return
+            self.query_cache.update(payload.get("queries", {}))
+            defaults = sum(key.endswith(":[]") for key in self.query_cache)
+            if defaults == len(self.project.get("pages", [])):
+                runtime = next(iter(self.query_cache.values())).get("runtime")
+                if runtime:
+                    self.project["dataRuntime"] = {**runtime, "prepared": True}
+        except (OSError, ValueError, TypeError):
+            self.query_cache.clear()
+
+    def _save_cache(self) -> None:
+        if not self.cache_path:
+            return
+        queries = {key: value for key, value in self.query_cache.items() if key.endswith(":[]")}
+        payload = {"version": CACHE_VERSION, "source": self._source_signature(), "queries": queries}
+        temporary = self.cache_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        os.replace(temporary, self.cache_path)
 
     def query(self, page_id: str, filters: list[dict]) -> dict:
         page = next((item for item in self.project["pages"] if item["id"] == page_id), None)
         if not page:
             raise PBIParseError("Página não encontrada")
+        key = self._cache_key(page_id, filters)
         with self.lock:
-            return self.engine.query_page(page, filters)
+            cached = self.query_cache.pop(key, None)
+            if cached is not None:
+                self.query_cache[key] = cached
+                return cached
+            result = self.engine.query_page(page, filters)
+            self.query_cache[key] = result
+            while len(self.query_cache) > 64:
+                self.query_cache.popitem(last=False)
+            if not filters:
+                self._save_cache()
+            return result
+
+    def prepare(self) -> None:
+        with self.lock:
+            self.engine._ensure_runtime()
+            for page in self.project.get("pages", []):
+                key = self._cache_key(page["id"], [])
+                if key not in self.query_cache:
+                    self.query_cache[key] = self.engine.query_page(page, [])
+            for result in self.query_cache.values():
+                result["runtime"] = {**result.get("runtime", {}), "prepared": True}
+            self.project["dataRuntime"] = {**self.engine.status(), "prepared": True}
+            self._save_cache()
 
     def close(self) -> None:
         self.engine.close()
@@ -57,12 +120,17 @@ class ApplicationState:
         with self._runtime_lock:
             runtime = self._runtimes.pop(report_id, None)
             if runtime is None:
-                runtime = ReportRuntime(Path(report["source_path"]))
+                source = Path(report["source_path"])
+                runtime = ReportRuntime(source, self._report_dir(source) / "prepared-cache.json")
             self._runtimes[report_id] = runtime
             while len(self._runtimes) > 4:
                 _, stale = self._runtimes.popitem(last=False)
                 stale.close()
             return runtime
+
+    def _report_dir(self, source: Path) -> Path:
+        source = source.resolve()
+        return next((parent for parent in source.parents if parent.parent == self.db.reports_dir.resolve()), source.parent)
 
     def store_report(self, actor: dict, workspace_id: int, filename: str, data: bytes) -> dict:
         self.db.require_workspace(actor, workspace_id, "editor")
@@ -88,9 +156,10 @@ class ApplicationState:
                     raise ValueError("O ZIP não contém um arquivo .pbip")
                 source = candidates[0]
                 source_type = "PBIP"
-            runtime = ReportRuntime(source)
+            runtime = ReportRuntime(source, report_dir / "prepared-cache.json")
             try:
                 name = runtime.project.get("name") or Path(safe_name).stem
+                runtime.prepare()
             finally:
                 runtime.close()
             return self.db.add_report(actor, workspace_id, name, safe_name, source_type, source)

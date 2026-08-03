@@ -134,6 +134,8 @@ class ModelEngine:
         fields = visual.get("fields", [])
         columns = [field for field in fields if field["kind"] == "Column"]
         measures = [self._enrich_measure(field) for field in fields if field["kind"] == "Measure"]
+        visual_filters = visual.get("filters", [])
+        context = self._visual_context(context, visual_filters)
         visual_type = visual.get("type")
         if visual_type == "slicer" and columns:
             field = columns[0]
@@ -143,13 +145,102 @@ class ModelEngine:
             return {"kind": "cards", "values": [self._measure_value(field, context) for field in measures]}
         if visual_type in {"tableEx", "pivotTable"}:
             row_columns = [field for field in columns if field["role"] in {"Values", "Rows"}]
-            rows = self._table_rows(row_columns, measures, context, limit=200)
+            required = self._required_measures(measures, visual)
+            has_measure_filter = any(item.get("field", {}).get("kind") == "Measure" for item in visual_filters)
+            rows = self._table_rows(row_columns, required, context, limit=500 if has_measure_filter else 200)
+            rows = self._post_process(rows, visual, row_columns, measures, 200)
             return {"kind": "table", "columns": row_columns + measures, "rows": rows, "truncated": len(rows) == 200}
 
         group_fields = [field for field in columns if field["role"] in {"Category", "Series"}]
         values = [field for field in measures if field["role"] not in {"Tooltips"}] or measures[:1]
-        rows = self._group_rows(group_fields, values, context, limit=150)
+        required = self._required_measures(values, visual)
+        has_measure_filter = any(item.get("field", {}).get("kind") == "Measure" for item in visual_filters)
+        rows = self._group_rows(group_fields, required, context, limit=500 if has_measure_filter else 150)
+        rows = self._post_process(rows, visual, group_fields, values, 150, drop_empty=True)
         return {"kind": "chart", "groups": group_fields, "measures": values, "rows": rows}
+
+    def _visual_context(self, context: FilterContext, filters: list[dict[str, Any]]) -> FilterContext:
+        runtime = self._ensure_runtime()
+        result = context.copy()
+        for item in filters:
+            field, operator = item.get("field", {}), item.get("operator")
+            if field.get("kind") != "Column":
+                continue
+            table, column = field.get("table"), field.get("name")
+            if table not in runtime.tables or column not in runtime.tables[table]:
+                continue
+            series = runtime.tables[table][column]
+            if operator in {"in", "notIn"}:
+                values = self._normalize_filter_values(series, item.get("values", []))
+                mask = series.isin(values)
+                if operator == "notIn": mask = ~mask
+            else:
+                value = self._normalize_filter_values(series, [item.get("value")])[0]
+                mask = self._compare(series, operator, value)
+            result.add(Condition(table, mask, column), replace=False)
+        return result
+
+    def _required_measures(self, visible: list[dict[str, Any]], visual: dict[str, Any]) -> list[dict[str, Any]]:
+        result = list(visible)
+        known = {(field["table"], field["name"]) for field in result}
+        candidates = [item.get("field", {}) for item in visual.get("filters", [])] + [item.get("field", {}) for item in visual.get("sort", [])]
+        for field in candidates:
+            key = (field.get("table"), field.get("name"))
+            if field.get("kind") == "Measure" and key not in known:
+                result.append(self._enrich_measure({**field, "role": "Internal"}))
+                known.add(key)
+        return result
+
+    @staticmethod
+    def _compare(left: Any, operator: str, right: Any) -> Any:
+        if operator == "gt": return left > right
+        if operator == "gte": return left >= right
+        if operator == "lt": return left < right
+        if operator == "lte": return left <= right
+        if operator == "neq": return left != right
+        return left == right
+
+    def _post_process(self, rows: list[dict[str, Any]], visual: dict[str, Any], groups: list[dict[str, Any]], visible: list[dict[str, Any]], limit: int, drop_empty: bool = False) -> list[dict[str, Any]]:
+        for item in visual.get("filters", []):
+            field = item.get("field", {})
+            if field.get("kind") != "Measure":
+                continue
+            key, operator = self._key(field), item.get("operator")
+            if operator in {"in", "notIn"}:
+                allowed = item.get("values", [])
+                rows = [row for row in rows if (row.get(key) in allowed) != (operator == "notIn")]
+            else:
+                value = item.get("value")
+                rows = [row for row in rows if row.get(key) is not None and bool(self._compare(row.get(key), operator, value))]
+        if drop_empty and visible:
+            measure_keys = [self._key(field) for field in visible]
+            rows = [row for row in rows if any(row.get(key) is not None for key in measure_keys)]
+        rows = self._sort_rows(rows, visual.get("sort", []), groups)
+        allowed_keys = {self._key(field) for field in groups + visible}
+        return [{key: value for key, value in row.items() if key in allowed_keys} for row in rows[:limit]]
+
+    def _sort_rows(self, rows: list[dict[str, Any]], sorts: list[dict[str, Any]], groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not sorts or not rows:
+            return rows
+        category_key = self._key(groups[0]) if groups else None
+        for spec in reversed(sorts):
+            field, descending = spec.get("field", {}), str(spec.get("direction", "Ascending")).lower().startswith("desc")
+            key = self._key(field)
+            if category_key and field.get("kind") == "Measure" and len(groups) > 1:
+                totals: dict[Any, float] = {}
+                for row in rows:
+                    value = row.get(key)
+                    totals[row.get(category_key)] = totals.get(row.get(category_key), 0.0) + (float(value) if isinstance(value, (int, float)) else 0.0)
+                rows.sort(key=lambda row: totals.get(row.get(category_key), 0.0), reverse=descending)
+            else:
+                populated = [row for row in rows if row.get(key) is not None]
+                empty = [row for row in rows if row.get(key) is None]
+                try:
+                    populated.sort(key=lambda row: row.get(key), reverse=descending)
+                except TypeError:
+                    populated.sort(key=lambda row: str(row.get(key)), reverse=descending)
+                rows = populated + empty
+        return rows
 
     def _distinct(self, field: dict[str, Any], context: FilterContext, limit: int) -> list[Any]:
         runtime = self._ensure_runtime()

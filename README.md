@@ -57,6 +57,8 @@ uv run python -m unittest discover -s tests -v
 - Administração global de usuários e membros dos workspaces.
 - Upload de `.pbix` ou `.zip` contendo um projeto `.pbip`.
 - Modo de leitura em viewport completa com barra superior, seletor de página e retorno ao workspace.
+- Pré-processamento das páginas no upload e cache DAX persistente por relatório.
+- Cache em memória para combinações de página e filtros já consultadas.
 - Abre projetos `.pbip` modernos e `.pbix` que contenham definição PBIR.
 - Mantém páginas, dimensões, posições, ordem de camadas, plano de fundo e imagens.
 - Decodifica as tabelas reais do `DataModel`/ABF com PBIXRay e Xpress9.
@@ -65,6 +67,7 @@ uv run python -m unittest discover -s tests -v
 - Renderiza cartões, tabelas, matrizes, segmentações e gráficos com dados reais.
 - Usa Apache ECharts 6.1.0 auto-hospedado, sem depender de CDN durante a execução.
 - Traduz paleta, cores por categoria, títulos, legendas, eixos, grades, rótulos, linhas e marcadores definidos no tema e nos visuais PBIR.
+- Respeita filtros de coluna/medida, ordenação ascendente/descendente e orientação horizontal, vertical ou grid dos navegadores PBIR.
 - Permite filtrar os demais visuais clicando em barras, setores, pontos e categorias dos gráficos.
 - Recalcula a página quando uma segmentação é alterada.
 - Exibe campos e papéis associados a cada visual, além do JSON PBIR original.
@@ -87,6 +90,8 @@ O executor vetorizado atual cobre as construções usadas pelo projeto de refer�
 O PBIP normalmente não versiona os dados locais. Quando seu `cache.abf` contém zero linhas, o viewer procura um PBIX irmão com o mesmo nome. Arquivos Power BI usados em testes locais não são enviados ao repositório porque podem conter dados reais.
 
 O decodificador de armazenamento é o projeto MIT [PBIXRay](https://github.com/Hugoberry/pbixray). O executor DAX, o contexto de filtros, a propagação de relacionamentos e o planejador de consultas dos visuais ficam em `pbi_viewer/dax.py` e `pbi_viewer/engine.py`.
+
+Durante o upload, o servidor extrai o modelo e calcula todas as páginas sem filtros. Os resultados ficam no arquivo `prepared-cache.json` dentro do diretório persistente do relatório. O cache é invalidado automaticamente quando o arquivo de dados muda. Consultas interativas com filtros também usam um cache LRU em memória.
 
 ## Limites técnicos
 
