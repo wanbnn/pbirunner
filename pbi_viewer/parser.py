@@ -232,6 +232,30 @@ def _visual_sort(visual: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def _navigator_orientation(value: Any, position: dict[str, Any]) -> str:
+    """Normalize PBIR's numeric grid-orientation enum to a renderable mode.
+
+    PBIR stores this property as a literal (for example ``1D``), which the
+    literal reader exposes as the number 1.  The page navigator enum is
+    Horizontal=0, Vertical=1, Grid=2.  Older/custom files may contain the
+    names directly, so keep those forms supported and use the visual bounds
+    as a safe fallback for unknown values.
+    """
+    fallback = "Vertical" if position.get("height", 0) > position.get("width", 0) else "Horizontal"
+    if isinstance(value, bool):
+        return fallback
+    if isinstance(value, (int, float)):
+        return {0: "Horizontal", 1: "Vertical", 2: "Grid"}.get(int(value), fallback)
+    text = str(value or "").strip().lower()
+    if text in {"0", "0d", "horizontal"}:
+        return "Horizontal"
+    if text in {"1", "1d", "vertical"}:
+        return "Vertical"
+    if text in {"2", "2d", "grid"}:
+        return "Grid"
+    return fallback
+
+
 def _visual(raw: dict[str, Any], theme: dict[str, Any]) -> dict[str, Any]:
     visual = raw.get("visual", {})
     query_state = visual.get("query", {}).get("queryState", {})
@@ -331,7 +355,10 @@ def _visual(raw: dict[str, Any], theme: dict[str, Any]) -> dict[str, Any]:
                 "fontSize": _property(nav_text, "fontSize", 9),
                 "fontFamily": _property(nav_text, "fontFamily", "Segoe UI"),
                 "bold": bool(_property(nav_text, "bold", False)),
-                "orientation": str(_property(layout_props, "orientation", _property(layout_props, "gridOrientation", "Vertical" if position.get("height", 0) > position.get("width", 0) else "Horizontal"))),
+                "orientation": _navigator_orientation(
+                    _property(layout_props, "orientation", _property(layout_props, "gridOrientation", None)),
+                    position,
+                ),
                 "cellPadding": _property(layout_props, "cellPadding", 4),
                 "rows": _property(layout_props, "rows", None),
                 "columns": _property(layout_props, "columns", None),

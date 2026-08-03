@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pbi_viewer.parser import PBIParseError, _visual, _visual_filters, parse_project
+from pbi_viewer.parser import PBIParseError, _navigator_orientation, _visual, _visual_filters, parse_project
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +64,12 @@ class ParserIntegrationTests(unittest.TestCase):
         raw = {"name": "nav", "position": {"width": 80, "height": 400}, "visual": {"visualType": "pageNavigator", "objects": {}}}
         parsed = _visual(raw, {})
         self.assertEqual(parsed["style"]["navigator"]["orientation"], "Vertical")
+
+    def test_normalizes_pbir_navigator_orientation_enum(self):
+        position = {"width": 212, "height": 561}
+        self.assertEqual(_navigator_orientation(0, position), "Horizontal")
+        self.assertEqual(_navigator_orientation(1, position), "Vertical")
+        self.assertEqual(_navigator_orientation("2D", position), "Grid")
 
 
 if __name__ == "__main__":
