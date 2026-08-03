@@ -167,6 +167,18 @@ class ApplicationState:
             shutil.rmtree(report_dir, ignore_errors=True)
             raise
 
+    def delete_report(self, actor: dict, report_id: int) -> None:
+        report = self.db.get_report(actor, report_id, "editor")
+        with self._runtime_lock:
+            runtime = self._runtimes.pop(report_id, None)
+        if runtime:
+            runtime.close()
+        report_path = Path(report["source_path"]).resolve()
+        report_dir = self._report_dir(report_path)
+        self.db.delete_report(actor, report_id)
+        if report_dir.exists() and report_dir.is_dir() and self.db.reports_dir.resolve() in report_dir.parents:
+            shutil.rmtree(report_dir)
+
     @staticmethod
     def _extract_zip(archive: Path, destination: Path) -> None:
         try:
@@ -343,6 +355,23 @@ class ViewerHandler(BaseHTTPRequestHandler):
         except FileNotFoundError as exc:
             self._error(str(exc), 404)
         except (PBIParseError, OSError, ValueError, zipfile.BadZipFile) as exc:
+            self._error(str(exc))
+
+    def do_DELETE(self) -> None:
+        path = urlparse(self.path).path
+        try:
+            self._check_origin()
+            match = re.fullmatch(r"/api/reports/(\d+)", path)
+            if not match:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self.state.delete_report(self._actor(), int(match.group(1)))
+            self._json({"ok": True})
+        except PermissionError as exc:
+            self._error(str(exc), 403 if self.state.db.user_for_token(self._token()) else 401)
+        except FileNotFoundError as exc:
+            self._error(str(exc), 404)
+        except (OSError, ValueError) as exc:
             self._error(str(exc))
 
 

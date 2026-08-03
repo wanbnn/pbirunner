@@ -54,6 +54,21 @@ class PlatformTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ApplicationState._extract_zip(archive, destination)
 
+    def test_report_deletion_requires_editor_and_removes_metadata(self):
+        admin, _ = self.db.setup("Administrador", "admin@example.com", "segredo123")
+        viewer = self.db.create_user(admin, "Leitor", "leitor@example.com", "segredo123")
+        workspace = self.db.list_workspaces(admin)[0]
+        self.db.set_member(admin, workspace["id"], viewer["email"], "viewer")
+        source = self.data_dir / "report.pbix"
+        source.write_bytes(b"pbix")
+        report = self.db.add_report(admin, workspace["id"], "Relatório", "report.pbix", "PBIX", source)
+        with self.assertRaises(PermissionError):
+            self.db.delete_report(viewer, report["id"])
+        removed = self.db.delete_report(admin, report["id"])
+        self.assertEqual(removed["id"], report["id"])
+        with self.assertRaises(FileNotFoundError):
+            self.db.get_report(admin, report["id"])
+
 
 if __name__ == "__main__":
     unittest.main()

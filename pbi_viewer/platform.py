@@ -316,3 +316,13 @@ class PlatformDB:
                 raise FileNotFoundError("Relatório não encontrado")
             self.require_workspace(actor, row["workspace_id"], minimum)
             return dict(row)
+
+    def delete_report(self, actor: dict[str, Any], report_id: int) -> dict[str, Any]:
+        """Remove a report metadata row after enforcing workspace access."""
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM reports WHERE id=?", (report_id,)).fetchone()
+            if not row:
+                raise FileNotFoundError("Relatório não encontrado")
+            self.require_workspace(actor, row["workspace_id"], "editor")
+            db.execute("DELETE FROM reports WHERE id=?", (report_id,))
+            return dict(row)
