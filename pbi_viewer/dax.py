@@ -668,9 +668,12 @@ class DAXRuntime:
             return needle.casefold() in str(value).casefold()
         if name == "COUNTROWS":
             table = value(args[0])
-            if isinstance(table, VirtualTable): return len(table.frame)
+            if isinstance(table, VirtualTable):
+                count = len(table.frame)
+                return count if count else None
             table = _table_name(args[0])
-            return int(self.mask(table, context).sum())
+            count = int(self.mask(table, context).sum())
+            return count if count else None
 
         value = self.evaluate(args[0], context)
         if not isinstance(value, ColumnValue):

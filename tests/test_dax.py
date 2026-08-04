@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from pbi_viewer.dax import DAXRuntime, FilterContext
+from pbi_viewer.dax import Condition, DAXRuntime, FilterContext
 
 
 class DAXVirtualTableTests(unittest.TestCase):
@@ -45,6 +45,11 @@ class DAXVirtualTableTests(unittest.TestCase):
         label = self.runtime.evaluate('SWITCH(TRUE(), [Total] > 10, "alto", "baixo")', FilterContext())
         self.assertEqual(percentile, 3)
         self.assertEqual(label, "alto")
+
+    def test_countrows_returns_blank_for_empty_filter_context(self):
+        context = FilterContext()
+        context.add(Condition("Fatos", self.runtime.tables["Fatos"]["Categoria"] == "inexistente", "Categoria"))
+        self.assertIsNone(self.runtime.evaluate("COUNTROWS(Fatos)", context))
 
 
 if __name__ == "__main__":
