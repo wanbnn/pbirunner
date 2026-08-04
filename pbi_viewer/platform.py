@@ -108,6 +108,11 @@ class PlatformDB:
                 CREATE INDEX IF NOT EXISTS idx_reports_workspace ON reports(workspace_id);
                 """
             )
+            workspace_columns = {row[1] for row in db.execute("PRAGMA table_info(workspaces)")}
+            if "logo" not in workspace_columns:
+                db.execute("ALTER TABLE workspaces ADD COLUMN logo BLOB")
+            if "logo_mime" not in workspace_columns:
+                db.execute("ALTER TABLE workspaces ADD COLUMN logo_mime TEXT")
 
     def configured(self) -> bool:
         with self.connect() as db:
@@ -259,7 +264,7 @@ class PlatformDB:
 
     @staticmethod
     def _workspace(row: sqlite3.Row) -> dict[str, Any]:
-        return {"id": row["id"], "name": row["name"], "description": row["description"], "role": row["role"], "reportCount": row["report_count"]}
+        return {"id": row["id"], "name": row["name"], "description": row["description"], "role": row["role"], "reportCount": row["report_count"], "hasLogo": bool(row["logo"])}
 
     def get_workspace(self, actor: dict[str, Any], workspace_id: int) -> dict[str, Any]:
         role = self.require_workspace(actor, workspace_id)
@@ -277,7 +282,22 @@ class PlatformDB:
                     "SELECT u.id,u.name,u.email,m.role FROM workspace_members m JOIN users u ON u.id=m.user_id "
                     "WHERE m.workspace_id=? ORDER BY u.name COLLATE NOCASE", (workspace_id,)
                 )]
-            return {"id": row["id"], "name": row["name"], "description": row["description"], "role": role, "reports": reports, "members": members}
+            return {"id": row["id"], "name": row["name"], "description": row["description"], "role": role, "hasLogo": bool(row["logo"]), "reports": reports, "members": members}
+
+    def set_workspace_logo(self, actor: dict[str, Any], workspace_id: int, mime: str, data: bytes) -> None:
+        self.require_workspace(actor, workspace_id, "admin")
+        with self.connect() as db:
+            if not db.execute("SELECT 1 FROM workspaces WHERE id=?", (workspace_id,)).fetchone():
+                raise FileNotFoundError("Workspace não encontrado")
+            db.execute("UPDATE workspaces SET logo=?,logo_mime=? WHERE id=?", (data, mime, workspace_id))
+
+    def get_workspace_logo(self, actor: dict[str, Any], workspace_id: int) -> tuple[str, bytes]:
+        self.require_workspace(actor, workspace_id)
+        with self.connect() as db:
+            row = db.execute("SELECT logo,logo_mime FROM workspaces WHERE id=?", (workspace_id,)).fetchone()
+            if not row or not row["logo"]:
+                raise FileNotFoundError("Logo não encontrada")
+            return row["logo_mime"], bytes(row["logo"])
 
     def set_member(self, actor: dict[str, Any], workspace_id: int, email: str, role: str) -> dict[str, Any]:
         actor_role = self.require_workspace(actor, workspace_id, "admin")

@@ -69,6 +69,18 @@ class PlatformTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             self.db.get_report(admin, report["id"])
 
+    def test_workspace_logo_is_persistent_and_requires_admin(self):
+        admin, _ = self.db.setup("Administrador", "admin@example.com", "segredo123")
+        editor = self.db.create_user(admin, "Editor", "editor@example.com", "segredo123")
+        workspace = self.db.list_workspaces(admin)[0]
+        self.db.set_member(admin, workspace["id"], editor["email"], "editor")
+        with self.assertRaises(PermissionError):
+            self.db.set_workspace_logo(editor, workspace["id"], "image/png", b"png")
+        self.db.set_workspace_logo(admin, workspace["id"], "image/svg+xml", b"<svg/>")
+        mime, data = self.db.get_workspace_logo(editor, workspace["id"])
+        self.assertEqual((mime, data), ("image/svg+xml", b"<svg/>"))
+        self.assertTrue(self.db.get_workspace(admin, workspace["id"])["hasLogo"])
+
 
 if __name__ == "__main__":
     unittest.main()

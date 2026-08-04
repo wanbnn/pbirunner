@@ -132,7 +132,7 @@ class ApplicationState:
         source = source.resolve()
         return next((parent for parent in source.parents if parent.parent == self.db.reports_dir.resolve()), source.parent)
 
-    def store_report(self, actor: dict, workspace_id: int, filename: str, data: bytes) -> dict:
+    def store_report(self, actor: dict, workspace_id: int, filename: str, data: bytes, display_name: str = "") -> dict:
         self.db.require_workspace(actor, workspace_id, "editor")
         safe_name = Path(filename).name
         suffix = Path(safe_name).suffix.lower()
@@ -158,7 +158,9 @@ class ApplicationState:
                 source_type = "PBIP"
             runtime = ReportRuntime(source, report_dir / "prepared-cache.json")
             try:
-                name = runtime.project.get("name") or Path(safe_name).stem
+                name = display_name.strip() or runtime.project.get("name") or Path(safe_name).stem
+                if len(name) > 120:
+                    raise ValueError("O nome do relatório deve ter no máximo 120 caracteres")
                 runtime.prepare()
             finally:
                 runtime.close()
@@ -277,6 +279,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
             if path == "/api/users":
                 self._json(self.state.db.list_users(self._actor()))
                 return
+            match = re.fullmatch(r"/api/workspaces/(\d+)/logo", path)
+            if match:
+                mime, data = self.state.db.get_workspace_logo(self._actor(), int(match.group(1)))
+                self._send(data, mime)
+                return
             match = re.fullmatch(r"/api/workspaces/(\d+)", path)
             if match:
                 self._json(self.state.db.get_workspace(self._actor(), int(match.group(1))))
@@ -338,10 +345,30 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 payload = self._payload(length)
                 self._json(self.state.db.set_member(actor, int(match.group(1)), payload.get("email", ""), payload.get("role", "viewer")))
                 return
+            match = re.fullmatch(r"/api/workspaces/(\d+)/logo", path)
+            if match:
+                data = self.rfile.read(length)
+                filename = unquote(self.headers.get("X-Filename", "logo.png"))
+                suffix = Path(filename).suffix.lower()
+                if len(data) > 2 * 1024 * 1024:
+                    raise ValueError("A logo deve ter no máximo 2 MB")
+                if suffix == ".png" and data.startswith(b"\x89PNG\r\n\x1a\n"):
+                    mime = "image/png"
+                elif suffix == ".svg":
+                    text = data.decode("utf-8", errors="strict")
+                    if not re.search(r"<svg\b", text, re.IGNORECASE) or re.search(r"<script\b|<foreignObject\b|<!DOCTYPE|<\?xml-stylesheet|\bon\w+\s*=|(?:href|src)\s*=\s*['\"](?:https?:|//|data:)", text, re.IGNORECASE):
+                        raise ValueError("SVG inválido ou com conteúdo externo/executável")
+                    mime = "image/svg+xml"
+                else:
+                    raise ValueError("Envie uma logo PNG ou SVG válida")
+                self.state.db.set_workspace_logo(actor, int(match.group(1)), mime, data)
+                self._json({"ok": True})
+                return
             match = re.fullmatch(r"/api/workspaces/(\d+)/reports", path)
             if match:
                 filename = unquote(self.headers.get("X-Filename", "upload.pbix"))
-                self._json(self.state.store_report(actor, int(match.group(1)), filename, self.rfile.read(length)), 201)
+                display_name = unquote(self.headers.get("X-Report-Name", ""))
+                self._json(self.state.store_report(actor, int(match.group(1)), filename, self.rfile.read(length), display_name), 201)
                 return
             match = re.fullmatch(r"/api/reports/(\d+)/query-page", path)
             if match:
