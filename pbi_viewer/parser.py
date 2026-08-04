@@ -417,6 +417,13 @@ def _page_background(page: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _page_hidden(page: dict[str, Any]) -> bool:
+    if page.get("hidden") is True or page.get("isHidden") is True:
+        return True
+    visibility = str(page.get("visibility") or "").strip().casefold()
+    return visibility.startswith("hidden")
+
+
 class _Source:
     def __init__(self, read: Callable[[str], bytes], names: list[str], prefix: str = ""):
         self.read = read
@@ -452,6 +459,8 @@ def _parse_report(source: _Source) -> dict[str, Any]:
         pages.append({
             "id": page.get("name", page_id),
             "name": page.get("displayName", page_id),
+            "hidden": _page_hidden(page),
+            "visibility": page.get("visibility", "Visible"),
             "width": page.get("width", 1280),
             "height": page.get("height", 720),
             "displayOption": page.get("displayOption", "FitToPage"),

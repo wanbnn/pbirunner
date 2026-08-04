@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pbi_viewer.parser import PBIParseError, _navigator_orientation, _visual, _visual_filters, parse_project
+from pbi_viewer.parser import PBIParseError, _navigator_orientation, _page_hidden, _visual, _visual_filters, parse_project
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,6 +70,18 @@ class ParserIntegrationTests(unittest.TestCase):
         self.assertEqual(_navigator_orientation(0, position), "Horizontal")
         self.assertEqual(_navigator_orientation(1, position), "Vertical")
         self.assertEqual(_navigator_orientation("2D", position), "Grid")
+
+    def test_normalizes_hidden_page_variants(self):
+        self.assertTrue(_page_hidden({"visibility": "HiddenInViewMode"}))
+        self.assertTrue(_page_hidden({"isHidden": True}))
+        self.assertFalse(_page_hidden({"visibility": "Visible"}))
+        self.assertFalse(_page_hidden({}))
+
+    @unittest.skipUnless((ROOT / "MonitorIA_IFood_FGX.pbix").exists(), "fixture com página oculta não está versionada")
+    def test_parses_hidden_page_from_pbix(self):
+        project = parse_project(ROOT / "MonitorIA_IFood_FGX.pbix")
+        hidden = [page["name"] for page in project["pages"] if page["hidden"]]
+        self.assertEqual(hidden, ["👐 Liderança & Equipes"])
 
 
 if __name__ == "__main__":
