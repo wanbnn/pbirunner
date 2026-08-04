@@ -81,6 +81,26 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual((mime, data), ("image/svg+xml", b"<svg/>"))
         self.assertTrue(self.db.get_workspace(admin, workspace["id"])["hasLogo"])
 
+    def test_owner_deletes_workspace_and_all_report_files(self):
+        owner, _ = self.db.setup("Proprietário", "owner@example.com", "segredo123")
+        editor = self.db.create_user(owner, "Editor", "editor@example.com", "segredo123")
+        workspace = self.db.list_workspaces(owner)[0]
+        self.db.set_member(owner, workspace["id"], editor["email"], "editor")
+        report_dir = self.db.reports_dir / "workspace-delete-test"
+        report_dir.mkdir()
+        source = report_dir / "report.pbix"
+        source.write_bytes(b"pbix")
+        report = self.db.add_report(owner, workspace["id"], "Relatório", source.name, "PBIX", source)
+        with self.assertRaises(PermissionError):
+            self.db.delete_workspace(editor, workspace["id"])
+        state = ApplicationState(self.data_dir)
+        state.delete_workspace(owner, workspace["id"])
+        state.close()
+        self.assertFalse(report_dir.exists())
+        with self.assertRaises(FileNotFoundError):
+            self.db.get_report(owner, report["id"])
+        self.assertEqual(self.db.list_workspaces(owner), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -284,6 +284,15 @@ class PlatformDB:
                 )]
             return {"id": row["id"], "name": row["name"], "description": row["description"], "role": role, "hasLogo": bool(row["logo"]), "reports": reports, "members": members}
 
+    def delete_workspace(self, actor: dict[str, Any], workspace_id: int) -> list[dict[str, Any]]:
+        self.require_workspace(actor, workspace_id, "owner")
+        with self.connect() as db:
+            if not db.execute("SELECT 1 FROM workspaces WHERE id=?", (workspace_id,)).fetchone():
+                raise FileNotFoundError("Workspace não encontrado")
+            reports = [dict(row) for row in db.execute("SELECT id,source_path FROM reports WHERE workspace_id=?", (workspace_id,))]
+            db.execute("DELETE FROM workspaces WHERE id=?", (workspace_id,))
+            return reports
+
     def set_workspace_logo(self, actor: dict[str, Any], workspace_id: int, mime: str, data: bytes) -> None:
         self.require_workspace(actor, workspace_id, "admin")
         with self.connect() as db:

@@ -181,6 +181,26 @@ class ApplicationState:
         if report_dir.exists() and report_dir.is_dir() and self.db.reports_dir.resolve() in report_dir.parents:
             shutil.rmtree(report_dir)
 
+    def delete_workspace(self, actor: dict, workspace_id: int) -> None:
+        self.db.require_workspace(actor, workspace_id, "owner")
+        workspace = self.db.get_workspace(actor, workspace_id)
+        report_ids = [report["id"] for report in workspace["reports"]]
+        with self._runtime_lock:
+            runtimes = [self._runtimes.pop(report_id, None) for report_id in report_ids]
+        for runtime in runtimes:
+            if runtime:
+                runtime.close()
+        reports = self.db.delete_workspace(actor, workspace_id)
+        directories: set[Path] = set()
+        for report in reports:
+            source = Path(report["source_path"]).resolve()
+            report_dir = self._report_dir(source)
+            if self.db.reports_dir.resolve() in report_dir.parents:
+                directories.add(report_dir)
+        for report_dir in directories:
+            if report_dir.exists() and report_dir.is_dir():
+                shutil.rmtree(report_dir)
+
     @staticmethod
     def _extract_zip(archive: Path, destination: Path) -> None:
         try:
@@ -388,12 +408,17 @@ class ViewerHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             self._check_origin()
-            match = re.fullmatch(r"/api/reports/(\d+)", path)
-            if not match:
-                self.send_error(HTTPStatus.NOT_FOUND)
+            workspace = re.fullmatch(r"/api/workspaces/(\d+)", path)
+            if workspace:
+                self.state.delete_workspace(self._actor(), int(workspace.group(1)))
+                self._json({"ok": True})
                 return
-            self.state.delete_report(self._actor(), int(match.group(1)))
-            self._json({"ok": True})
+            report = re.fullmatch(r"/api/reports/(\d+)", path)
+            if report:
+                self.state.delete_report(self._actor(), int(report.group(1)))
+                self._json({"ok": True})
+                return
+            self.send_error(HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
             self._error(str(exc), 403 if self.state.db.user_for_token(self._token()) else 401)
         except FileNotFoundError as exc:
